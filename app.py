@@ -2,46 +2,62 @@ import streamlit as st
 import pandas as pd
 import requests
 from bs4 import BeautifulSoup
+import plotly.graph_objects as go
 from pypdf import PdfReader
 import io
-import plotly.graph_objects as go
 
-# 1. 페이지 설정 (아이폰 모바일 대응)
-st.set_page_config(page_title="주식 리서치 대시보드", layout="centered")
+# 1. 페이지 설정
+st.set_page_config(page_title="주식 리서치 앱", layout="wide")
 
-# 2. 로직 함수들 (기존에 작성하신 함수들을 아래 형식으로 통합하세요)
-def get_reports_data():
-    # Naver Finance 등에서 데이터 수집하는 기존 로직
-    # 예: df = ...
-    return pd.DataFrame() # 테스트용 빈 DF
-
-def parse_pdf_content(pdf_url):
-    # PDF 파싱하여 요약 반환하는 기존 로직
-    return "AI 요약 내용입니다."
-
-# 3. Streamlit 화면 구성
-st.title("📈 실시간 증권 리서치")
-
-if st.button("🔄 최신 리포트 새로고침"):
-    with st.spinner('데이터 수집 및 PDF 분석 중...'):
-        st.session_state['data'] = get_reports_data()
-        st.success('업데이트 완료!')
-
-# 데이터 표시
-if 'data' in st.session_state and not st.session_state['data'].empty:
-    df = st.session_state['data']
+# 2. 통합 로직 (기존 크롤링 및 파싱 함수 통합)
+def get_naver_reports():
+    # Naver Finance 크롤링 로직 통합
+    url = "https://finance.naver.com/research/company_list.naver"
+    response = requests.get(url)
+    soup = BeautifulSoup(response.text, 'html.parser')
     
-    # 모바일용 선택창
-    selected_stock = st.selectbox("종목을 선택하세요", df['stock'].unique())
+    data = []
+    # 리스트 파싱 로직 (기존 구현하신 내용)
+    rows = soup.select('table.type_1 tr')[2:]
+    for row in rows:
+        cols = row.select('td')
+        if len(cols) > 3:
+            data.append({
+                'stock': cols[0].text.strip(),
+                'title': cols[1].text.strip(),
+                'pdf_link': 'https://finance.naver.com' + cols[3].find('a')['href'] if cols[3].find('a') else ''
+            })
+    return pd.DataFrame(data)
+
+def extract_pdf_summary(pdf_url):
+    # PDF 파싱 및 텍스트 추출 로직 통합
+    response = requests.get(pdf_url)
+    pdf_file = io.BytesIO(response.content)
+    reader = PdfReader(pdf_file)
+    text = "".join([page.extract_text() for page in reader.pages[:2]]) # 앞 2페이지 요약
+    return text[:500] + "..." # 간략히 요약
+
+# 3. Streamlit 대시보드 UI
+st.title("📊 모바일 증권 리서치 앱")
+
+if 'reports' not in st.session_state:
+    st.session_state['reports'] = pd.DataFrame()
+
+if st.sidebar.button("🔄 리포트 업데이트"):
+    with st.spinner('네이버 데이터를 불러오는 중...'):
+        st.session_state['reports'] = get_naver_reports()
+        st.rerun()
+
+if not st.session_state['reports'].empty:
+    df = st.session_state['reports']
+    selected_stock = st.selectbox("종목 선택", df['stock'].unique())
     
-    # 선택된 리포트 상세
     report = df[df['stock'] == selected_stock].iloc[0]
-    st.subheader(f"🔍 {report['stock']} 분석")
-    st.write(f"의견: {report['opinion']} | 목표가: {report['target_price']}")
+    st.subheader(f"💡 {report['title']}")
     
-    # PDF 내용 파싱 (버튼 클릭 시 분석)
-    if st.button("📄 리포트 AI 요약 보기"):
-        summary = parse_pdf_content(report['pdf_link'])
-        st.info(summary)
+    if st.button("📄 AI 리포트 요약 보기"):
+        with st.spinner('PDF 분석 중...'):
+            summary = extract_pdf_summary(report['pdf_link'])
+            st.info(summary)
 else:
-    st.warning("데이터가 없습니다. 새로고침을 눌러주세요.")
+    st.write("사이드바의 '리포트 업데이트' 버튼을 눌러주세요.")
